@@ -1689,9 +1689,6 @@ function isUnmaterializedThreadError(error: unknown, threadId: string): boolean 
   return [
     `no rollout found for thread id ${threadId}`,
     `thread not found: ${threadId}`,
-    `thread ${threadId} not found`,
-    `thread not loaded: ${threadId}`,
-    `thread ${threadId} not loaded`,
   ].some((candidate) => message.includes(candidate));
 }
 
