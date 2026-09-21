@@ -21,6 +21,7 @@ export type FakeSharedCodexAppServerOptions = {
   notifyOnlySubscribers?: boolean;
   resumeRequiresCompletedRollout?: boolean;
   readRequiresCompletedRollout?: boolean;
+  missingRolloutError?: "no-rollout" | "thread-not-found";
 };
 
 type FakeTokenUsage = {
@@ -144,7 +145,7 @@ function handleFakeMessage(
       const threadId = requireString(message.params?.threadId, "threadId");
       const thread = requireThread(threads, threadId);
       if (options.resumeRequiresCompletedRollout && !hasCompletedTurn(thread)) {
-        respondError(webSocket, message.id, `no rollout found for thread id ${threadId}`);
+        respondError(webSocket, message.id, missingRolloutError(options, threadId));
         return;
       }
       thread.subscribers.add(webSocket);
@@ -163,7 +164,7 @@ function handleFakeMessage(
       const threadId = requireString(message.params?.threadId, "threadId");
       const thread = requireThread(threads, threadId);
       if (options.readRequiresCompletedRollout && !hasCompletedTurn(thread)) {
-        respondError(webSocket, message.id, `no rollout found for thread id ${threadId}`);
+        respondError(webSocket, message.id, missingRolloutError(options, threadId));
         return;
       }
       const includeTurns = message.params?.includeTurns === true;
@@ -463,6 +464,12 @@ function requireThread(threads: Map<string, FakeThread>, threadId: string): Fake
 
 function hasCompletedTurn(thread: FakeThread): boolean {
   return thread.turns.some((turn) => turn.status !== "inProgress");
+}
+
+function missingRolloutError(options: FakeSharedCodexAppServerOptions, threadId: string): string {
+  return options.missingRolloutError === "thread-not-found"
+    ? `thread not found: ${threadId}`
+    : `no rollout found for thread id ${threadId}`;
 }
 
 function requireString(value: unknown, name: string): string {
