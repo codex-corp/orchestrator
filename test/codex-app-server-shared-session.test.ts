@@ -672,6 +672,50 @@ test("fresh shared codex-app-server session first send materializes rollout with
   );
 });
 
+test("fresh shared codex-app-server session first send tolerates current thread-not-found materialization error", async () => {
+  await withFakeSharedCodexAppServer(
+    async ({ socketPath }) => {
+      await withTempWorkspace(async (workspaceRoot) => {
+        const task = await launchSharedCodexAppServerSessionTask({
+          workspaceRoot,
+          plan: sessionPlan(workspaceRoot, socketPath),
+          name: "fresh first send current error",
+        });
+
+        const sent = await sendTaskMessage({
+          workspaceRoot,
+          taskId: task.taskId,
+          text: "Say hello.",
+          wait: true,
+          timeoutMs: 5_000,
+        });
+        const after = await readTaskRecord({ workspaceRoot }, task.taskId);
+        const events = await readTaskEvents({
+          workspaceRoot,
+          taskId: task.taskId,
+          agentOnly: true,
+        });
+        const kinds = events.map((event) => String(event.data.kind));
+
+        assert.equal(sent.status, "completed");
+        assert.equal(sent.operation?.result, "Hello from shared Codex.");
+        assert.equal(sent.provider?.turnId, "turn-fake-1");
+        assert.equal(after.session?.state, "idle");
+        assert.equal(after.lastOperation?.status, "succeeded");
+        assert.ok(kinds.includes("thread.rollout.pending"));
+        assert.ok(kinds.includes("operation.completed"));
+      });
+    },
+    {
+      notifyOnlySubscribers: true,
+      readRequiresCompletedRollout: true,
+      resumeRequiresCompletedRollout: true,
+      missingRolloutError: "thread-not-found",
+      turnDelayMs: 50,
+    },
+  );
+});
+
 test("fresh shared codex-app-server session monitor settles first send after rollout appears", async () => {
   await withFakeSharedCodexAppServer(
     async ({ socketPath }) => {
