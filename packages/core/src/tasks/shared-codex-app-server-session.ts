@@ -1682,7 +1682,14 @@ function assertThreadIdle(response: unknown, threadId: string): void {
 }
 
 function isNoRolloutForThreadError(error: unknown, threadId: string): boolean {
-  return errorMessage(error).includes(`no rollout found for thread id ${threadId}`);
+  const message = errorMessage(error);
+  return [
+    `no rollout found for thread id ${threadId}`,
+    `thread not found: ${threadId}`,
+    `thread ${threadId} not found`,
+    `thread not loaded: ${threadId}`,
+    `thread ${threadId} not loaded`,
+  ].some((candidate) => message.includes(candidate));
 }
 
 function terminalResultForNotification(
