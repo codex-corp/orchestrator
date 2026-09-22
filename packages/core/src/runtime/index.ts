@@ -21,6 +21,11 @@ export {
   buildAgentResumeLaunchPlan,
   LaunchPlanError,
 } from "./launch-plan.ts";
+export {
+  buildCustomProcessResumePlan,
+  parseCustomProcessResumeConfig,
+  type CustomProcessResumeConfig,
+} from "./custom-process-resume.ts";
 export type { ConfiguredRuntimeRegistry, OrchestratorConfigLoadOptions } from "./config.ts";
 export type {
   ConfiguredRuntimeRegistryLoader,

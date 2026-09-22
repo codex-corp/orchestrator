@@ -102,6 +102,7 @@ V1 fields:
   accepts `argv-last`, `argv-first`, or `stdin`
 - `output`: `text`, `json`, or `{ "format": "jsonl", "finalEvent": "done" }`
 - `modelFlag`: optional flag for passing `--model <value>`
+- `resume`: optional resume configuration; accepts `args` containing `{sessionId}` (and optional `{prompt}`), with optional `prompt` transport (`stdin`, `argv-last`, `argv-first`)
 - `env`: small static environment values
 - `timeoutMs`: optional timeout override
 - `maxOutputBytes`: optional output cap override
@@ -109,7 +110,7 @@ V1 fields:
 Do not use shell command strings here. If a custom agent is a script, expose it
 as an executable and pass arguments as an array.
 
-Only literal `{prompt}` and `{model}` placeholders are replaced. Do not use
+Only literal `{prompt}`, `{model}`, and `{sessionId}` placeholders are replaced. Do not use
 `{task}`, `{{prompt}}`, or `{{model}}`. JavaScript or shell template text such
 as `${prompt}` is left alone inside wrapper code.
 

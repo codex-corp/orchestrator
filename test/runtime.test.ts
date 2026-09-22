@@ -25,6 +25,7 @@ test("built-in runtime registry is exhaustive and internally consistent", () => 
     "codex-app-server",
     "copilot",
     "grok",
+    "jules",
     "pi",
     "shell",
   ]);
@@ -1203,6 +1204,202 @@ test("non-argv prompt transports are handled generically", () => {
   );
   assert.deepEqual(httpPlan.args, []);
   assert.equal(httpPlan.taskForSdkOrHttp, sampleTask);
+});
+
+test("compileOrchestratorConfig compiles custom process resume configurations", () => {
+  const configs = compileOrchestratorConfig({
+    agents: {
+      "resumable-agent": {
+        adapter: "process",
+        command: "custom-agent",
+        args: ["run"],
+        prompt: "stdin",
+        output: { format: "jsonl", finalEvent: "final" },
+        resume: {
+          args: ["resume", "--session", "{sessionId}"],
+          prompt: "stdin",
+        },
+      },
+      "argv-resumable": {
+        adapter: "process",
+        command: "custom-agent",
+        args: ["run", "{prompt}"],
+        output: "text",
+        resume: {
+          args: ["resume", "--session", "{sessionId}", "{prompt}"],
+        },
+      },
+      "non-resumable": {
+        adapter: "process",
+        command: "plain-agent",
+        args: ["run"],
+        output: "text",
+      },
+    },
+  });
+
+  const resumable = configs.find((c) => c.id === "resumable-agent");
+  assert.ok(resumable);
+  assert.equal(resumable.capabilities.supportsResume, true);
+  assert.equal(resumable.resume?.supported, true);
+  assert.deepEqual(resumable.resume?.args, ["resume", "--session", "{sessionId}"]);
+  assert.deepEqual(resumable.resume?.prompt, { kind: "stdin", closeAfterWrite: true });
+
+  const argvResumable = configs.find((c) => c.id === "argv-resumable");
+  assert.ok(argvResumable);
+  assert.equal(argvResumable.capabilities.supportsResume, true);
+  assert.equal(argvResumable.resume?.supported, true);
+  assert.deepEqual(argvResumable.resume?.prompt, { kind: "argv_template" });
+
+  const nonResumable = configs.find((c) => c.id === "non-resumable");
+  assert.ok(nonResumable);
+  assert.equal(nonResumable.capabilities.supportsResume, false);
+  assert.equal(nonResumable.resume?.supported, false);
+});
+
+test("compileOrchestratorConfig rejects invalid custom process resume configurations", () => {
+  assert.throws(
+    () =>
+      compileOrchestratorConfig({
+        agents: {
+          bad1: {
+            adapter: "process",
+            command: "agent",
+            args: ["run"],
+            output: "text",
+            resume: { args: ["resume"] }, // Missing {sessionId}
+          },
+        },
+      }),
+    (err: unknown) => err instanceof LaunchPlanError && err.reason === "invalid_config_schema",
+  );
+
+  assert.throws(
+    () =>
+      compileOrchestratorConfig({
+        agents: {
+          bad2: {
+            adapter: "process",
+            command: "agent",
+            args: ["run"],
+            output: "text",
+            resume: { args: ["resume", "--session", "{{sessionId}}"] }, // double braces
+          },
+        },
+      }),
+    (err: unknown) => err instanceof LaunchPlanError && err.reason === "invalid_config_schema",
+  );
+
+  assert.throws(
+    () =>
+      compileOrchestratorConfig({
+        agents: {
+          bad3: {
+            adapter: "process",
+            command: "agent",
+            args: ["run"],
+            output: "text",
+            resume: {
+              args: ["resume", "--session", "{sessionId}", "{prompt}"],
+              prompt: "stdin", // cannot combine {prompt} with prompt mode
+            },
+          },
+        },
+      }),
+    (err: unknown) => err instanceof LaunchPlanError && err.reason === "invalid_config_schema",
+  );
+});
+
+test("buildAgentResumeLaunchPlan handles custom process runtimes with resume", () => {
+  const [resumableConfig, argvResumableConfig] = compileOrchestratorConfig({
+    agents: {
+      "custom-jules": {
+        adapter: "process",
+        command: "orchestrator-jules",
+        args: ["run"],
+        prompt: "stdin",
+        output: { format: "jsonl", finalEvent: "final" },
+        resume: {
+          args: ["resume", "--session", "{sessionId}"],
+          prompt: "stdin",
+        },
+      },
+      "custom-argv": {
+        adapter: "process",
+        command: "argv-runner",
+        args: ["run", "{prompt}"],
+        output: "text",
+        resume: {
+          args: ["resume", "-s", "{sessionId}", "-p", "{prompt}"],
+        },
+      },
+    },
+  });
+
+  const registry: RuntimeRegistry = {
+    "custom-jules": resumableConfig,
+    "custom-argv": argvResumableConfig,
+  };
+
+  const plan = buildAgentResumeLaunchPlan(
+    {
+      runtime: "custom-jules",
+      task: "Fix the remaining race condition",
+      cwd: sampleCwd,
+      provider: {
+        provider: "jules",
+        sessionId: "jules-session-98765",
+      },
+    },
+    registry,
+  );
+
+  assert.equal(plan.runtime, "custom-jules");
+  assert.equal(plan.executable, "orchestrator-jules");
+  assert.deepEqual(plan.args, ["resume", "--session", "jules-session-98765"]);
+  assert.deepEqual(plan.resume, {
+    provider: "jules",
+    sessionId: "jules-session-98765",
+  });
+  assert.deepEqual(plan.stdin, {
+    input: "Fix the remaining race condition",
+    closeAfterWrite: true,
+  });
+
+  const argvPlan = buildAgentResumeLaunchPlan(
+    {
+      runtime: "custom-argv",
+      task: "Follow up instruction",
+      cwd: sampleCwd,
+      provider: {
+        sessionId: "sess-abc",
+      },
+    },
+    registry,
+  );
+
+  assert.equal(argvPlan.runtime, "custom-argv");
+  assert.deepEqual(argvPlan.args, ["resume", "-s", "sess-abc", "-p", "Follow up instruction"]);
+  assert.deepEqual(argvPlan.resume, {
+    provider: "custom-argv",
+    sessionId: "sess-abc",
+  });
+  assert.equal(argvPlan.stdin, undefined);
+
+  // Missing sessionId error
+  assert.throws(
+    () =>
+      buildAgentResumeLaunchPlan(
+        {
+          runtime: "custom-jules",
+          task: "continue",
+          cwd: sampleCwd,
+          provider: {},
+        },
+        registry,
+      ),
+    (err: unknown) => err instanceof LaunchPlanError && err.reason === "missing_resume_provider_id",
+  );
 });
 
 async function writeJson(path: string, value: unknown): Promise<void> {

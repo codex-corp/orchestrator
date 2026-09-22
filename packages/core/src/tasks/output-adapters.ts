@@ -287,6 +287,16 @@ function providerMetadataFromRuntimeEvent(
     return sessionId ? { provider: "grok", sessionId } : undefined;
   }
 
+  const kind = stringValue(event, "kind");
+  const sourceType = stringValue(event, "sourceType");
+  if (kind === "agent.session" || sourceType === "agent.session") {
+    const sessionId = stringValue(event, "sessionId");
+    if (sessionId) {
+      const provider = stringValue(event, "provider") ?? runtime;
+      return { provider, sessionId };
+    }
+  }
+
   return undefined;
 }
 
@@ -315,6 +325,11 @@ function providerMetadataMismatch(
       return actual.sessionId && actual.sessionId !== expected.sessionId
         ? `Grok resumed session "${actual.sessionId}" but Orchestrator requested "${expected.sessionId}".`
         : undefined;
+    default:
+      if (expected.sessionId && actual.sessionId && actual.sessionId !== expected.sessionId) {
+        return `Runtime "${actual.provider ?? expected.provider}" resumed session "${actual.sessionId}" but Orchestrator requested "${expected.sessionId}".`;
+      }
+      return undefined;
   }
 }
 
@@ -352,6 +367,17 @@ function normalizeRuntimeEvent(
     source: "runtime",
     ...(sourceType === "final" ? { final: true } : {}),
   });
+  if (sourceType === "agent.session" || sourceType === "session") {
+    return compactData({
+      runtime,
+      source: "stdout",
+      kind: "agent.session",
+      sourceType,
+      provider: stringValue(event, "provider") ?? runtime,
+      sessionId: stringValue(event, "sessionId"),
+    });
+  }
+
   if (sourceType === "usage" || sourceType === "agent.usage") {
     return compactData({
       runtime,

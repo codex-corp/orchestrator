@@ -1,4 +1,5 @@
 import { BUILT_IN_AGENT_RUNTIMES, getRuntimeConfig } from "./runtimes.ts";
+import { buildCustomProcessResumePlan } from "./custom-process-resume.ts";
 import type {
   AgentLaunchPlan,
   BuildAgentLaunchPlanInput,
@@ -146,10 +147,13 @@ export function buildAgentResumeLaunchPlan(
     case "grok":
       return buildGrokResumePlan(input, runtime);
     default:
+      if (runtime.resume?.supported && runtime.resume.args) {
+        return buildCustomProcessResumePlan(input, runtime);
+      }
       throw new LaunchPlanError(`Runtime "${input.runtime}" does not support provider resume.`, {
         reason: "unsupported_resume",
         input: input.runtime,
-        hint: "This release supports provider resume for codex, codex-app-server, claude-code, copilot, and grok only.",
+        hint: "This release supports provider resume for codex, codex-app-server, claude-code, copilot, grok, and configured custom process agents.",
       });
   }
 }

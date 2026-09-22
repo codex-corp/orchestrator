@@ -3,6 +3,7 @@ import { access, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { BUILT_IN_AGENT_RUNTIMES } from "./runtimes.ts";
+import { parseCustomProcessResumeConfig } from "./custom-process-resume.ts";
 import type {
   HeadlessAgentRuntimeConfig,
   OutputTransport,
@@ -349,6 +350,8 @@ function compileProcessRuntime(
   const maxOutputBytes =
     optionalPositiveInteger(config, "maxOutputBytes", sourcePath, id) ?? DEFAULT_MAX_OUTPUT_BYTES;
 
+  const resume = parseCustomProcessResumeConfig(config, sourcePath, id);
+
   return {
     id,
     displayName: optionalString(config, "displayName", sourcePath, id) ?? id,
@@ -373,7 +376,7 @@ function compileProcessRuntime(
       cwdPolicy: "workspace",
       ...(modelFlag ? { modelFlag } : {}),
     },
-    resume: { supported: false },
+    resume,
     control: {
       interrupt: "process_group",
       steerRunning: false,
@@ -381,7 +384,7 @@ function compileProcessRuntime(
     capabilities: {
       supportsStreaming: output.kind === "jsonl_events",
       supportsRunningSteer: false,
-      supportsResume: false,
+      supportsResume: resume.supported,
       supportsStructuredEvents: output.kind === "jsonl_events",
       supportsWorktree: true,
       handlesOwnAuth: true,

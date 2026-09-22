@@ -71,9 +71,10 @@ function jsonlFixturePlan(input: {
 }
 
 function jsonlCommandPlan(input: {
-  runtime: "claude-code" | "codex" | "copilot" | "grok";
+  runtime: string;
   command: string;
   cwd: string;
+  finalEvent?: string;
 }): AgentLaunchPlan {
   return {
     runtime: input.runtime,
@@ -86,11 +87,12 @@ function jsonlCommandPlan(input: {
     outputTransport: {
       kind: "jsonl_events",
       finalEvent:
-        input.runtime === "grok"
+        input.finalEvent ??
+        (input.runtime === "grok"
           ? "end"
           : input.runtime === "claude-code" || input.runtime === "copilot"
             ? "result"
-            : "turn.completed",
+            : "turn.completed"),
     },
     expectedProcesses: ["sh"],
     interrupt: "process_group",
@@ -1465,6 +1467,88 @@ test("launchTask surfaces stderr for Copilot setup failures without final JSONL 
       view.rows[0]?.error,
       'Error: Model "bad-model" from --model flag is not available.',
     );
+  });
+});
+
+test("launchTask persists TaskProviderMetadata when custom JSONL process emits agent.session event", async () => {
+  await withTempWorkspace(async (workspaceRoot) => {
+    const sessionEvent = {
+      type: "agent.session",
+      provider: "jules",
+      sessionId: "60180116143991679",
+    };
+    const finalEvent = {
+      type: "final",
+      status: "completed",
+      text: "Custom agent finished successfully",
+    };
+    const command = [
+      `printf '%s\\n' ${quoteShellArg(JSON.stringify(sessionEvent))}`,
+      `printf '%s\\n' ${quoteShellArg(JSON.stringify(finalEvent))}`,
+    ].join("; ");
+
+    const handle = await launchTask({
+      workspaceRoot,
+      plan: jsonlCommandPlan({
+        runtime: "custom-agent",
+        command,
+        cwd: workspaceRoot,
+        finalEvent: "final",
+      }),
+    });
+
+    const completed = await handle.completed;
+    assert.equal(completed.status, "succeeded");
+    assert.deepEqual(completed.provider, {
+      provider: "jules",
+      sessionId: "60180116143991679",
+    });
+
+    const stored = await readTaskRecord({ workspaceRoot }, completed.taskId);
+    assert.deepEqual(stored.provider, {
+      provider: "jules",
+      sessionId: "60180116143991679",
+    });
+  });
+});
+
+test("launchTask fails resumed process tasks when custom provider emits a different session id", async () => {
+  await withTempWorkspace(async (workspaceRoot) => {
+    const sessionEvent = {
+      type: "agent.session",
+      provider: "jules",
+      sessionId: "different-session-999",
+    };
+    const command = `printf '%s\\n' ${quoteShellArg(JSON.stringify(sessionEvent))}; exit 1`;
+
+    const handle = await launchTask({
+      workspaceRoot,
+      plan: {
+        ...jsonlCommandPlan({
+          runtime: "jules",
+          command,
+          cwd: workspaceRoot,
+          finalEvent: "final",
+        }),
+        resume: {
+          provider: "jules",
+          sessionId: "requested-session-111",
+        },
+      },
+      provider: {
+        provider: "jules",
+        sessionId: "requested-session-111",
+      },
+      resume: {
+        fromTaskId: "source-task",
+        rootTaskId: "source-task",
+        attempt: 1,
+      },
+    });
+
+    const completed = await handle.completed;
+    assert.equal(completed.status, "failed");
+    assert.match(completed.error ?? "", /requested-session-111/);
   });
 });
 
