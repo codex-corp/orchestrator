@@ -25,7 +25,7 @@ test("README presents the model-first skill path and links the operator contract
     readFile(new URL("../doc/operator-guide.md", import.meta.url), "utf8"),
   ]);
 
-  assert.match(readme, /dead-simple skill built on a powerful local CLI/);
+  assert.match(readme, /(?:dead-)?simple skill built on a powerful local CLI/);
   assert.match(readme, /You speak in models and outcomes/);
   assert.deepEqual(
     [

@@ -21,7 +21,7 @@
 <sub>Codex &middot; Claude Code &middot; Copilot CLI &middot; Grok Build &middot; Pi</sub>
 
 Orchestrator is a simple skill built on a powerful local CLI inspired by Kubectl. Work with
-one of your agents; it orchestrates others (Claude Code, Codex, etc) in the background. 
+one of your agents; it orchestrates others (Claude Code, Codex, etc) in the background.
 
 You speak in models and outcomes:
 
@@ -45,8 +45,8 @@ npm install -g @backnotprop/orchestrator-cli
 The CLI install is optional up front. The skill can install it on first use.
 
 ```sh
-/orchestrator launch a gpt5.6 sol agent to build the backend, 
-              a fable agent to design the frontend wireframes, 
+/orchestrator launch a gpt5.6 sol agent to build the backend,
+              a fable agent to design the frontend wireframes,
               and after that a grok4.5 agent to build the frontend
 ```
 
