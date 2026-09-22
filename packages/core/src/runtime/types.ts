@@ -5,6 +5,7 @@ export const BUILT_IN_RUNTIME_IDS = [
   "copilot",
   "grok",
   "pi",
+  "jules",
   "shell",
 ] as const;
 
@@ -74,6 +75,7 @@ export type HeadlessAgentRuntimeConfig = {
   resume?: {
     supported: boolean;
     args?: readonly string[];
+    prompt?: PromptTransport;
   };
   control: {
     interrupt: InterruptStrategy;
@@ -113,6 +115,7 @@ export type BuildAgentResumeLaunchPlanInput = {
   outputMode?: string;
   allowDisabledRuntime?: boolean;
   provider: {
+    provider?: string;
     threadId?: string;
     sessionId?: string;
   };
@@ -138,7 +141,7 @@ export type AgentLaunchPlan = {
     acceptsShellCommand: boolean;
   };
   resume?: {
-    provider: "codex" | "claude-code" | "copilot" | "grok";
+    provider: string;
     threadId?: string;
     sessionId?: string;
   };

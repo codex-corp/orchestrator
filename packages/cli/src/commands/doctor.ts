@@ -69,8 +69,13 @@ export async function commandDoctor(options: DoctorOptions): Promise<number> {
   const runtimes = await doctorRuntimeAvailability(runtimeConfig.registry, {
     cwd: options.workspaceRoot,
   });
+  const runtimeSuggestions = runtimes
+    .map((r) => r.suggestion)
+    .filter((s): s is string => Boolean(s));
+
   const report: CliDoctorReport = {
     ...parentReport,
+    suggestions: [...parentReport.suggestions, ...runtimeSuggestions],
     runtimeSummary: summarizeRuntimeDoctorChecks(runtimes),
     runtimes,
   };
@@ -111,6 +116,7 @@ function compactDoctorReport(
       executable: runtime.executable,
       ...(runtime.path ? { path: runtime.path } : {}),
       message: runtime.message,
+      ...(runtime.suggestion ? { suggestion: runtime.suggestion } : {}),
     })),
     fullDoctor: { args: ["doctor", "--json", ...doctorArgsSuffix(options)] },
   };
