@@ -1,0 +1,515 @@
+#!/usr/bin/env node
+import { spawn } from "node:child_process";
+import * as readline from "node:readline";
+
+const DEFAULT_POLL_INTERVAL_MS = 5000;
+const MAX_ACTIVITY_MESSAGE_BYTES = 4000;
+const MAX_FINAL_TEXT_BYTES = 16000;
+
+let currentChildProcess = null;
+
+function emitJsonl(obj) {
+  process.stdout.write(`${JSON.stringify(obj)}\n`);
+}
+
+function emitError(sessionId, state, message) {
+  emitJsonl({
+    type: "error",
+    sessionId: sessionId || undefined,
+    state: state || undefined,
+    message,
+  });
+}
+
+function truncateText(text, maxBytes) {
+  if (!text) return "";
+  const buf = Buffer.from(text, "utf8");
+  if (buf.byteLength <= maxBytes) return text;
+  return buf.subarray(0, maxBytes).toString("utf8");
+}
+
+function executeCjules(args, stdinContent = null) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("cjules", args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, NO_COLOR: "1" },
+    });
+    currentChildProcess = child;
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+
+    child.on("error", (err) => {
+      currentChildProcess = null;
+      reject(err);
+    });
+
+    child.on("close", (code) => {
+      currentChildProcess = null;
+      resolve({ code, stdout, stderr });
+    });
+
+    if (stdinContent !== null) {
+      child.stdin.write(stdinContent);
+      child.stdin.end();
+    } else {
+      child.stdin.end();
+    }
+  });
+}
+
+async function readStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString("utf8").trim();
+}
+
+function parseJsonOrThrow(raw, contextName) {
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`Failed to parse ${contextName} JSON from cjules: ${err.message}\nRaw output: ${raw.slice(0, 500)}`);
+  }
+}
+
+function extractSessionId(sessionData) {
+  if (!sessionData) return null;
+  if (sessionData.id && typeof sessionData.id === "string") {
+    return sessionData.id;
+  }
+  if (sessionData.name && typeof sessionData.name === "string") {
+    return sessionData.name.replace(/^sessions\//, "");
+  }
+  return null;
+}
+
+function formatActivityMessage(activity) {
+  const type = activity.activityType || activity.type || "";
+  if (type === "AGENT_MESSAGED" || activity.agentMessage) {
+    const msg = activity.agentMessage?.message || activity.agentMessage?.text || activity.message || "";
+    return truncateText(msg, MAX_ACTIVITY_MESSAGE_BYTES);
+  }
+  if (type === "PLAN_GENERATED" || activity.planGenerated) {
+    const title = activity.planGenerated?.title || activity.plan?.title || "Plan generated";
+    return truncateText(title, MAX_ACTIVITY_MESSAGE_BYTES);
+  }
+  if (type === "PLAN_APPROVED" || activity.planApproved) {
+    return "Plan approved";
+  }
+  if (type === "PROGRESS_UPDATED" || activity.progressUpdated) {
+    const desc = activity.progressUpdated?.description || activity.progress?.description || activity.message || "Progress updated";
+    return truncateText(desc, MAX_ACTIVITY_MESSAGE_BYTES);
+  }
+  if (type === "SESSION_FAILED" || activity.sessionFailed) {
+    const reason = activity.sessionFailed?.reason || activity.failureReason || activity.message || "Session failed";
+    return truncateText(reason, MAX_ACTIVITY_MESSAGE_BYTES);
+  }
+  if (type === "SESSION_COMPLETED" || activity.sessionCompleted) {
+    return "Session completed";
+  }
+  if (type === "USER_MESSAGED" || activity.userMessage) {
+    const msg = activity.userMessage?.message || activity.message || "";
+    return truncateText(msg, MAX_ACTIVITY_MESSAGE_BYTES);
+  }
+  return truncateText(activity.message || type || "Activity", MAX_ACTIVITY_MESSAGE_BYTES);
+}
+
+function extractLatestAgentMessage(activities) {
+  if (!Array.isArray(activities)) return null;
+  for (let i = activities.length - 1; i >= 0; i--) {
+    const act = activities[i];
+    const type = act.activityType || act.type || "";
+    if (type === "AGENT_MESSAGED" || act.agentMessage) {
+      const msg = act.agentMessage?.message || act.agentMessage?.text || act.message;
+      if (msg && typeof msg === "string" && msg.trim()) {
+        return truncateText(msg.trim(), MAX_FINAL_TEXT_BYTES);
+      }
+    }
+  }
+  return null;
+}
+
+function extractLatestPlanOrAgentMessage(activities) {
+  if (!Array.isArray(activities)) return null;
+  for (let i = activities.length - 1; i >= 0; i--) {
+    const act = activities[i];
+    const type = act.activityType || act.type || "";
+    if (type === "PLAN_GENERATED" || act.planGenerated) {
+      const title = act.planGenerated?.title || act.plan?.title;
+      if (title && typeof title === "string" && title.trim()) {
+        return truncateText(title.trim(), MAX_FINAL_TEXT_BYTES);
+      }
+    }
+    if (type === "AGENT_MESSAGED" || act.agentMessage) {
+      const msg = act.agentMessage?.message || act.agentMessage?.text || act.message;
+      if (msg && typeof msg === "string" && msg.trim()) {
+        return truncateText(msg.trim(), MAX_FINAL_TEXT_BYTES);
+      }
+    }
+  }
+  return null;
+}
+
+function extractLatestFailureReason(activities, session) {
+  if (Array.isArray(activities)) {
+    for (let i = activities.length - 1; i >= 0; i--) {
+      const act = activities[i];
+      const type = act.activityType || act.type || "";
+      if (type === "SESSION_FAILED" || act.sessionFailed) {
+        const reason = act.sessionFailed?.reason || act.failureReason || act.message;
+        if (reason) return String(reason);
+      }
+    }
+  }
+  if (session && session.error && session.error.message) {
+    return String(session.error.message);
+  }
+  return "Jules session failed";
+}
+
+async function monitorSession(sessionId, options = {}) {
+  const pollInterval = options.pollIntervalMs || DEFAULT_POLL_INTERVAL_MS;
+  const account = options.account;
+  const baseArgs = account ? ["--account", account] : [];
+
+  let lastState = null;
+  let lastUpdateTime = null;
+  const seenActivityIds = new Set();
+
+  while (true) {
+    let getRes;
+    try {
+      getRes = await executeCjules([...baseArgs, "get", sessionId, "-f", "json"]);
+    } catch (err) {
+      emitError(sessionId, "UNKNOWN", `Failed to execute cjules get: ${err.message}`);
+      process.exit(1);
+    }
+
+    if (getRes.code !== 0) {
+      emitError(sessionId, "UNKNOWN", `cjules get failed (exit ${getRes.code}): ${getRes.stderr || getRes.stdout}`);
+      process.exit(getRes.code || 1);
+    }
+
+    const session = parseJsonOrThrow(getRes.stdout, "session");
+    const currentState = session.state || "UNKNOWN";
+    const currentUpdateTime = session.updateTime || "";
+
+    if (currentState !== lastState) {
+      emitJsonl({
+        type: "jules.state",
+        sessionId,
+        state: currentState,
+        updateTime: currentUpdateTime,
+      });
+      lastState = currentState;
+    }
+
+    let activities = [];
+    if (currentUpdateTime !== lastUpdateTime || currentState !== lastState) {
+      lastUpdateTime = currentUpdateTime;
+
+      try {
+        const logsRes = await executeCjules([...baseArgs, "logs", sessionId, "-f", "json"]);
+        if (logsRes.code === 0) {
+          const rawLogs = parseJsonOrThrow(logsRes.stdout, "logs");
+          activities = Array.isArray(rawLogs)
+            ? rawLogs
+            : Array.isArray(rawLogs.activities)
+              ? rawLogs.activities
+              : [];
+
+          for (const activity of activities) {
+            const actId =
+              activity.id ||
+              activity.name ||
+              `${activity.createTime || ""}_${activity.activityType || activity.type || ""}`;
+
+            if (!seenActivityIds.has(actId)) {
+              seenActivityIds.add(actId);
+              emitJsonl({
+                type: "jules.activity",
+                sessionId,
+                activityId: actId,
+                activityType: activity.activityType || activity.type || "ACTIVITY",
+                timestamp: activity.createTime || new Date().toISOString(),
+                message: formatActivityMessage(activity),
+              });
+            }
+          }
+        }
+      } catch (err) {
+        // Logs fetch failure during poll is non-fatal; state is authoritative
+      }
+    }
+
+    // Terminal & attention state checks
+    if (currentState === "COMPLETED") {
+      const agentMsg = extractLatestAgentMessage(activities);
+      emitJsonl({
+        type: "final",
+        status: "completed",
+        sessionId,
+        text: agentMsg || `Jules session ${sessionId} completed.`,
+      });
+      process.exit(0);
+    }
+
+    if (currentState === "FAILED") {
+      const reason = extractLatestFailureReason(activities, session);
+      emitError(sessionId, "FAILED", reason);
+      process.exit(1);
+    }
+
+    if (currentState === "CANCELLED") {
+      emitError(sessionId, "CANCELLED", `Jules session ${sessionId} was cancelled.`);
+      process.exit(1);
+    }
+
+    if (currentState === "AWAITING_USER_FEEDBACK") {
+      const agentMsg = extractLatestAgentMessage(activities);
+      emitJsonl({
+        type: "final",
+        status: "needs_input",
+        sessionId,
+        text: agentMsg || "Jules is awaiting user feedback.",
+      });
+      process.exit(0);
+    }
+
+    if (currentState === "AWAITING_PLAN_APPROVAL") {
+      const planOrMsg = extractLatestPlanOrAgentMessage(activities);
+      emitJsonl({
+        type: "final",
+        status: "needs_approval",
+        sessionId,
+        text: planOrMsg || "Jules is awaiting plan approval.",
+      });
+      process.exit(0);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollInterval));
+  }
+}
+
+async function handleRun(args) {
+  let noRepo = false;
+  let title = null;
+  let account = null;
+  let pollIntervalMs = DEFAULT_POLL_INTERVAL_MS;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--no-repo") noRepo = true;
+    else if (arg === "--title" && i + 1 < args.length) title = args[++i];
+    else if (arg === "--account" && i + 1 < args.length) account = args[++i];
+    else if (arg === "--poll-interval" && i + 1 < args.length) {
+      pollIntervalMs = Math.max(50, Math.floor(parseFloat(args[++i]) * 1000));
+    }
+  }
+
+  const prompt = await readStdin();
+  if (!prompt) {
+    process.stderr.write("orchestrator-jules: prompt must not be empty on stdin.\n");
+    process.exit(1);
+  }
+
+  const cjulesArgs = [];
+  if (account) cjulesArgs.push("--account", account);
+  cjulesArgs.push("new", "-f", "json");
+  if (noRepo) cjulesArgs.push("--no-repo");
+  if (title) cjulesArgs.push("--title", title);
+  cjulesArgs.push("-");
+
+  let res;
+  try {
+    res = await executeCjules(cjulesArgs, prompt);
+  } catch (err) {
+    emitError(null, "CREATE_FAILED", `Failed to invoke cjules: ${err.message}`);
+    process.exit(1);
+  }
+
+  if (res.code !== 0) {
+    emitError(null, "CREATE_FAILED", `cjules new failed (exit ${res.code}): ${res.stderr || res.stdout}`);
+    process.exit(res.code || 1);
+  }
+
+  let sessionData;
+  try {
+    sessionData = parseJsonOrThrow(res.stdout, "create session");
+  } catch (err) {
+    emitError(null, "CREATE_FAILED", err.message);
+    process.exit(1);
+  }
+  const sessionId = extractSessionId(sessionData);
+
+  if (!sessionId) {
+    emitError(null, "CREATE_FAILED", "cjules new response did not contain a valid session id.");
+    process.exit(1);
+  }
+
+  emitJsonl({
+    type: "agent.session",
+    provider: "jules",
+    sessionId,
+  });
+
+  await monitorSession(sessionId, { account, pollIntervalMs });
+}
+
+async function handleResume(args) {
+  let sessionId = null;
+  let account = null;
+  let pollIntervalMs = DEFAULT_POLL_INTERVAL_MS;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--session" && i + 1 < args.length) sessionId = args[++i];
+    else if (arg === "--account" && i + 1 < args.length) account = args[++i];
+    else if (arg === "--poll-interval" && i + 1 < args.length) {
+      pollIntervalMs = Math.max(50, Math.floor(parseFloat(args[++i]) * 1000));
+    }
+  }
+
+  if (!sessionId) {
+    process.stderr.write("orchestrator-jules resume: --session <id> is required.\n");
+    process.exit(1);
+  }
+
+  const prompt = await readStdin();
+  if (!prompt) {
+    process.stderr.write("orchestrator-jules resume: prompt must not be empty on stdin.\n");
+    process.exit(1);
+  }
+
+  const cjulesArgs = [];
+  if (account) cjulesArgs.push("--account", account);
+  cjulesArgs.push("msg", sessionId, "-");
+
+  let res;
+  try {
+    res = await executeCjules(cjulesArgs, prompt);
+  } catch (err) {
+    emitError(sessionId, "RESUME_FAILED", `Failed to invoke cjules msg: ${err.message}`);
+    process.exit(1);
+  }
+
+  if (res.code !== 0) {
+    emitError(sessionId, "RESUME_FAILED", `cjules msg failed (exit ${res.code}): ${res.stderr || res.stdout}`);
+    process.exit(res.code || 1);
+  }
+
+  emitJsonl({
+    type: "agent.session",
+    provider: "jules",
+    sessionId,
+  });
+
+  await monitorSession(sessionId, { account, pollIntervalMs });
+}
+
+async function handleMonitor(args) {
+  let sessionId = null;
+  let account = null;
+  let pollIntervalMs = DEFAULT_POLL_INTERVAL_MS;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--session" && i + 1 < args.length) sessionId = args[++i];
+    else if (arg === "--account" && i + 1 < args.length) account = args[++i];
+    else if (arg === "--poll-interval" && i + 1 < args.length) {
+      pollIntervalMs = Math.max(50, Math.floor(parseFloat(args[++i]) * 1000));
+    }
+  }
+
+  if (!sessionId) {
+    process.stderr.write("orchestrator-jules monitor: --session <id> is required.\n");
+    process.exit(1);
+  }
+
+  await monitorSession(sessionId, { account, pollIntervalMs });
+}
+
+async function handleApprove(args) {
+  let sessionId = null;
+  let account = null;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--session" && i + 1 < args.length) sessionId = args[++i];
+    else if (arg === "--account" && i + 1 < args.length) account = args[++i];
+  }
+
+  if (!sessionId) {
+    process.stderr.write("orchestrator-jules approve: --session <id> is required.\n");
+    process.exit(1);
+  }
+
+  const cjulesArgs = [];
+  if (account) cjulesArgs.push("--account", account);
+  cjulesArgs.push("approve", sessionId);
+
+  const res = await executeCjules(cjulesArgs);
+  if (res.code !== 0) {
+    process.stderr.write(`cjules approve failed: ${res.stderr || res.stdout}\n`);
+    process.exit(res.code || 1);
+  }
+
+  process.stdout.write(res.stdout);
+  process.exit(0);
+}
+
+function setupSignalHandlers() {
+  const cleanup = () => {
+    if (currentChildProcess && !currentChildProcess.killed) {
+      try {
+        currentChildProcess.kill("SIGTERM");
+      } catch (_err) {
+        // ignore
+      }
+    }
+    process.exit(130);
+  };
+
+  process.on("SIGINT", cleanup);
+  process.on("SIGTERM", cleanup);
+}
+
+async function main() {
+  setupSignalHandlers();
+
+  const command = process.argv[2];
+  const rest = process.argv.slice(3);
+
+  switch (command) {
+    case "run":
+      await handleRun(rest);
+      break;
+    case "resume":
+      await handleResume(rest);
+      break;
+    case "monitor":
+      await handleMonitor(rest);
+      break;
+    case "approve":
+      await handleApprove(rest);
+      break;
+    default:
+      process.stderr.write("Usage: orchestrator-jules <run|resume|monitor|approve> [options]\n");
+      process.exit(1);
+  }
+}
+
+main().catch((err) => {
+  emitError(null, "FATAL", err.message);
+  process.exit(1);
+});
