@@ -1,0 +1,21 @@
+{
+  "agents": {
+    "jules": {
+      "adapter": "process",
+      "displayName": "Jules",
+      "command": "/absolute/path/to/orchestrator-jules",
+      "args": ["run"],
+      "prompt": "stdin",
+      "output": {
+        "format": "jsonl",
+        "finalEvent": "final"
+      },
+      "resume": {
+        "args": ["resume", "--session", "{sessionId}"],
+        "prompt": "stdin"
+      },
+      "timeoutMs": 43200000,
+      "maxOutputBytes": 500000
+    }
+  }
+}

@@ -15,6 +15,7 @@ import {
   type TaskGoal,
   type TaskObservation,
   type TaskOperation,
+  type TaskProviderMetadata,
   type TaskStatus,
   type TaskSession,
 } from "@backnotprop/orchestrator-core";
@@ -41,6 +42,7 @@ export type TaskCommandSummary = {
   stopReason?: string;
   stopSignal?: NodeJS.Signals;
   location?: TaskLocation;
+  provider?: TaskProviderMetadata;
   session?: TaskSession;
   goal?: TaskGoal;
   currentOperation?: TaskOperation;
@@ -76,6 +78,7 @@ export function taskCommandSummary(
     ...(task.stopReason ? { stopReason: task.stopReason } : {}),
     ...(task.stopSignal ? { stopSignal: task.stopSignal } : {}),
     ...(task.location ? { location: task.location } : {}),
+    ...(task.provider ? { provider: task.provider } : {}),
     ...(task.session ? { session: task.session } : {}),
     ...(task.goal ? { goal: task.goal } : {}),
     ...(task.currentOperation ? { currentOperation: task.currentOperation } : {}),

@@ -430,6 +430,107 @@ test("CLI resume rejects tasks without real provider resume support", async () =
   }, "orchestrator-cli-resume-unsupported-");
 });
 
+test("CLI resume creates a new task for custom process agent using configured resume args", async () => {
+  await withTempWorkspace(async (workspaceRoot) => {
+    await writeFile(
+      `${workspaceRoot}/orchestrator.config.json`,
+      `${JSON.stringify(
+        {
+          agents: {
+            "custom-resumable": {
+              adapter: "process",
+              command: "node",
+              args: [
+                "-e",
+                "console.log(JSON.stringify({ type: 'agent.session', provider: 'custom-resumable', sessionId: 'sess-custom-123' })); console.log(JSON.stringify({ type: 'final', status: 'completed', text: 'source output' }));",
+                "{prompt}",
+              ],
+              output: {
+                format: "jsonl",
+                finalEvent: "final",
+              },
+              resume: {
+                command: "node",
+                args: [
+                  "-e",
+                  "console.log(JSON.stringify({ type: 'agent.session', provider: 'custom-resumable', sessionId: process.argv[1] })); console.log(JSON.stringify({ type: 'final', status: 'completed', text: 'resumed: ' + process.argv[2] }));",
+                  "{sessionId}",
+                  "{prompt}",
+                ],
+                sessionTemplate: "{sessionId}",
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const sourceLaunch = await runCli(
+      workspaceRoot,
+      [
+        "launch",
+        "custom-resumable",
+        "--workspace",
+        workspaceRoot,
+        "--wait",
+        "--json",
+        "initial prompt",
+      ],
+      10_000,
+    );
+    const source = JSON.parse(sourceLaunch.stdout) as AgentTaskRecord;
+    assert.equal(source.status, "succeeded");
+    assert.deepEqual(source.provider, {
+      provider: "custom-resumable",
+      sessionId: "sess-custom-123",
+    });
+
+    const resumedLaunch = await runCli(
+      workspaceRoot,
+      [
+        "resume",
+        source.taskId.slice(0, 8),
+        "--workspace",
+        workspaceRoot,
+        "--wait",
+        "--json",
+        "follow-up prompt",
+      ],
+      10_000,
+    );
+    const resumed = JSON.parse(resumedLaunch.stdout) as AgentTaskRecord;
+    const stored = await readTaskRecord({ workspaceRoot }, resumed.taskId);
+
+    assert.equal(resumed.status, "succeeded");
+    assert.equal(resumed.runtime, "custom-resumable");
+    assert.deepEqual(stored.provider, {
+      provider: "custom-resumable",
+      sessionId: "sess-custom-123",
+    });
+    assert.deepEqual(stored.resume, {
+      fromTaskId: source.taskId,
+      rootTaskId: source.taskId,
+      attempt: 1,
+    });
+    assert.deepEqual(stored.launchPlan.args, [
+      "-e",
+      "console.log(JSON.stringify({ type: 'agent.session', provider: 'custom-resumable', sessionId: process.argv[1] })); console.log(JSON.stringify({ type: 'final', status: 'completed', text: 'resumed: ' + process.argv[2] }));",
+      "sess-custom-123",
+      "follow-up prompt",
+    ]);
+
+    const read = await runCli(workspaceRoot, [
+      "read",
+      resumed.taskId,
+      "--workspace",
+      workspaceRoot,
+    ]);
+    assert.match(read.stdout, /resumed: follow-up prompt/);
+  }, "orchestrator-cli-resume-custom-process-");
+});
+
 async function installFakeRuntime(
   workspaceRoot: string,
   name: "codex" | "claude" | "copilot" | "grok",

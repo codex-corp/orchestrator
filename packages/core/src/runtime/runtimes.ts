@@ -342,6 +342,53 @@ export const SHELL_RUNTIME = {
   },
 } satisfies HeadlessAgentRuntimeConfig;
 
+export const JULES_RUNTIME = {
+  id: "jules",
+  displayName: "Jules",
+  enabled: true,
+  detect: {
+    command: "cjules",
+    versionArgs: ["--version"],
+    expectedProcesses: ["cjules"],
+  },
+  launch: {
+    executable: "cjules",
+    baseArgs: ["new", "-f", "json", "-"],
+    prompt: { kind: "stdin", closeAfterWrite: true },
+    output: { kind: "stdout_json" },
+    defaultOutputMode: "json",
+    outputModes: {
+      json: {
+        extraArgs: [],
+        output: { kind: "stdout_json" },
+      },
+    },
+    cwdPolicy: "workspace",
+  },
+  resume: {
+    supported: true,
+    args: ["msg"],
+    prompt: { kind: "stdin", closeAfterWrite: true },
+  },
+  control: {
+    interrupt: "process_group",
+    steerRunning: false,
+  },
+  capabilities: {
+    supportsStreaming: false,
+    supportsRunningSteer: false,
+    supportsResume: true,
+    supportsStructuredEvents: true,
+    supportsWorktree: false,
+    handlesOwnAuth: true,
+  },
+  defaults: {
+    timeoutMs: 900_000,
+    maxOutputBytes: 200_000,
+    isolation: "shared",
+  },
+} satisfies HeadlessAgentRuntimeConfig;
+
 export const BUILT_IN_AGENT_RUNTIMES = {
   codex: CODEX_RUNTIME,
   "codex-app-server": CODEX_APP_SERVER_RUNTIME,
@@ -349,6 +396,7 @@ export const BUILT_IN_AGENT_RUNTIMES = {
   copilot: COPILOT_RUNTIME,
   grok: GROK_RUNTIME,
   pi: PI_RUNTIME,
+  jules: JULES_RUNTIME,
   shell: SHELL_RUNTIME,
 } satisfies Record<BuiltInAgentRuntimeId, HeadlessAgentRuntimeConfig>;
 
