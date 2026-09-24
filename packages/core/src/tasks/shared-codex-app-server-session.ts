@@ -1037,7 +1037,7 @@ async function tryResumeSharedThread(input: {
     await appendProtocolResponse(input.context, "thread/resume", response);
     return response;
   } catch (error) {
-    if (input.allowMissingRollout && isNoRolloutForThreadError(error, input.threadId)) {
+    if (input.allowMissingRollout && isUnmaterializedThreadError(error, input.threadId)) {
       await reportPendingRollout(input.context, input.operationState, input.threadId);
       return undefined;
     }
@@ -1057,7 +1057,7 @@ async function readThreadIfMaterialized(
       includeTurns: true,
     });
   } catch (error) {
-    if (isNoRolloutForThreadError(error, threadId)) {
+    if (isUnmaterializedThreadError(error, threadId)) {
       await reportPendingRollout(context, operationState, threadId);
       return undefined;
     }
@@ -1681,8 +1681,15 @@ function assertThreadIdle(response: unknown, threadId: string): void {
   }
 }
 
-function isNoRolloutForThreadError(error: unknown, threadId: string): boolean {
-  return errorMessage(error).includes(`no rollout found for thread id ${threadId}`);
+function isUnmaterializedThreadError(error: unknown, threadId: string): boolean {
+  // Codex has used both rollout-specific and generic thread-not-found errors
+  // while a freshly started non-ephemeral thread has not materialized its
+  // first rollout yet. Treat those wire variants as the same transient state.
+  const message = errorMessage(error);
+  return [
+    `no rollout found for thread id ${threadId}`,
+    `thread not found: ${threadId}`,
+  ].some((candidate) => message.includes(candidate));
 }
 
 function terminalResultForNotification(
